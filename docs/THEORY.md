@@ -510,3 +510,22 @@ building goes under "Lessons from the build" at the bottom.
 - **Sanitizers find what tests can't.** The whole suite, plus the gateway under load with clients
   hanging up mid-request, ran under AddressSanitizer and UBSan: no use-after-free, no leaks, no UB.
   Tests check behaviour; sanitizers check that memory handling is actually correct. Say this in interviews.
+
+**Day 3: the race, measured ★**
+- `bench/race.py`: 60 clients, 600 requests, one user, 3 gateway nodes, limit 100 per 10 s window.
+  **naive mode admitted 558: +458% over the limit.** It doesn't just overshoot a little: nearly
+  everything got through. Why so bad: dozens of requests are in flight at once, they all `GET` the same
+  count (say 7), all decide "allowed", and all `SET 8`. The counter barely moves while hundreds of
+  requests pass. That's the **lost update** problem, at scale.
+- The fix is to make check-and-update one indivisible step *inside Redis*: `INCR` then compare (it
+  returns the new value), or, for multi-step algorithms like token bucket, a Lua script. Your
+  `fixed_window.lua` result goes in the README next to the 558.
+- **Fail modes are policy, per rule.** Against stub scripts (every call errors): `open` → 200,
+  `closed` → 429, `local` → a local limiter with `limit / nodes`. Login rules should be `closed`, so an
+  outage can't become a brute-force window; general API rules `open` or `local`.
+- **Logs for humans, metrics for totals.** Every Redis error increments `rl_redis_errors_total`, but
+  the log line is throttled to one a second. During an outage you'd otherwise write thousands of
+  identical lines a second, which is itself an outage (disk, log pipeline).
+- **Test wiring separately from logic.** Fake scripts that return fixed answers (`{1,7,0}`,
+  `{0,0,2500}`) prove the plumbing: argument passing, reply parsing, headers, `Retry-After` rounding.
+  Your real scripts are then the only variable when their tests run.
