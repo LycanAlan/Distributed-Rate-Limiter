@@ -54,10 +54,8 @@ std::vector<std::pair<std::string, int>> parse_shards(const std::string& csv) {
 }
 
 Mode parse_mode(const std::string& s) {
-  if (s == "local") return Mode::Local;
-  if (s == "redis") return Mode::Redis;
-  if (s == "hybrid") return Mode::Hybrid;
-  if (s == "naive") return Mode::Naive;
+  for (Mode mode : {Mode::Local, Mode::Redis, Mode::Hybrid, Mode::Naive})
+    if (s == mode_name(mode)) return mode;
   fail("mode must be local, redis, hybrid or naive, got " + quoted(s));
 }
 
@@ -216,6 +214,16 @@ std::unique_ptr<Limiter> make_limiter(Algo algo, int64_t limit, int64_t window_m
     case Algo::TokenBucket: return std::make_unique<TokenBucketLimiter>(limit, window_ms);
   }
   return nullptr;
+}
+
+const char* mode_name(Mode mode) {
+  switch (mode) {
+    case Mode::Local: return "local";
+    case Mode::Redis: return "redis";
+    case Mode::Hybrid: return "hybrid";
+    case Mode::Naive: return "naive";
+  }
+  return "unknown";
 }
 
 const char* algo_name(Algo algo) {

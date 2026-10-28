@@ -42,3 +42,4 @@ const Rule* match_rule(const std::vector<Rule>& rules, std::string_view method, 
 
 std::unique_ptr<Limiter> make_limiter(Algo algo, int64_t limit, int64_t window_ms);
 const char* algo_name(Algo algo);  // same as the lua/<name>.lua script
+const char* mode_name(Mode mode);  // as spelled on the command line
