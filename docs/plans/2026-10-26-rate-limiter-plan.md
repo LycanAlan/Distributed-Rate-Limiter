@@ -64,6 +64,7 @@ src/event_loop.h / .cpp        epoll + timer heap                               
 src/http.h / .cpp              request/response parsing + serializing           (Claude)
 src/config.h / .cpp            rules file, CLI flags, make_limiter()            (Claude)
 src/metrics.h / .cpp           counters, latency histogram, Prometheus text     (Claude)
+src/socket.h / .cpp            RAII Fd + non-blocking socket helpers            (Claude)
 src/upstream_pool.h / .cpp     pooled non-blocking upstream connections         (Claude)
 src/redis_async.h / .cpp       hiredis epoll adapter, EVALSHA, timeouts         (Claude)
 src/decider.h / .cpp           local/redis/hybrid/naive + fallback + breakers   (Claude)
@@ -426,10 +427,10 @@ unknown algo → exception mentioning "line 3"; `parse_args` for both example co
 
 **Produces:**
 ```cpp
-using DecideCb = std::function<void(Decision, bool fallback_used)>;
+using DecideCb = std::function<void(Decision)>;  // fallbacks are counted in metrics inside Decider
 class Decider {   // grows in C8/C9
  public:
-  Decider(EventLoop&, const Options&, const std::vector<Rule>&, Metrics&);
+  Decider(EventLoop&, const Options&, Metrics&);
   void decide(const Rule&, const std::string& client_key, DecideCb cb);  // may complete sync or async
 };
 class Server {

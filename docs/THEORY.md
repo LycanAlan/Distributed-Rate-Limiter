@@ -457,3 +457,27 @@ building goes under "Lessons from the build" at the bottom.
 - **HTTP framing is a security boundary.** The parser rejects `Transfer-Encoding`, duplicate
   conflicting `Content-Length`, spaces in header names (obsolete line folding) and double spaces in
   the request line. Being strict is the defense against request smuggling.
+
+**Day 2**
+- **Ids, not pointers, across async boundaries ★.** A request's decision (and later its Redis reply)
+  and the upstream response arrive in callbacks, possibly after the client disconnected and its
+  `Client` struct was destroyed. Each callback captures the client's **id** and looks it up first, and
+  a missing id means "drop the reply". Capturing `Client*` would be a use-after-free that only shows
+  up under load. (`server.cpp`, `forward` and `decide_then_forward`)
+- **Return the connection to the pool before calling back.** In `UpstreamPool::finish`, the
+  connection goes back to the idle list *before* the response callback runs, because the callback may
+  immediately `send()` the next request and should get that warm connection, not open a new one.
+- **Callbacks can complete synchronously.** Local-mode decisions and "can't connect" upstream
+  failures call back *inside* the call that started them. Code that assumes "my callback runs later"
+  breaks, so every callback re-looks-up its state instead of holding references across the call.
+- **RAII for fds.** `Fd` closes on destruction and is move-only, so no path leaks a socket. Order
+  still matters: `del_fd` from epoll *before* the `Fd` closes, so epoll never holds a dead or reused fd.
+- **Signals as events.** `signalfd` turns SIGTERM into a readable fd, so graceful shutdown (stop
+  accepting, finish in-flight requests, exit within 2 s) is ordinary event-loop code instead of
+  async-signal-unsafe handler code.
+- **Missing key header → count by IP.** If a rule keys on `X-User-Id` and the header is absent, we
+  fall back to the client IP. Otherwise omitting the header would be an easy way around the limiter.
+- **First numbers (5 s wrk runs, fake limiter, not the final benchmarks):** upstream directly
+  154k req/s with p99 0.54 ms; through the gateway 56k req/s with p99 1.28 ms; with a rule check
+  54k req/s. The proxy hop costs about 3× because one thread handles two sockets per request; the
+  rate-limit check itself costs about 4%.
