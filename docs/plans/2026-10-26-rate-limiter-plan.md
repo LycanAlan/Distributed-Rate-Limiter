@@ -28,6 +28,9 @@ GoogleTest 1.14, wrk 4.1, Python 3.12 (stdlib only). WSL2 Ubuntu 24.04.
 - `Limiter::allow` takes `now_ms` from the caller; no clock reads inside limiters.
 - Files are LF line endings (`.gitattributes`), otherwise bash and Lua break.
 - Python scripts: stdlib only.
+- **Code style (everyone's code; reviews check it):** small single-purpose functions; names that
+  say what a thing is; RAII for every fd and resource; named constants instead of magic numbers;
+  `const` wherever it fits; comments explain *why*, not *what*; one statement per line, no clever one-liners.
 
 ## How to build and test (inside WSL)
 

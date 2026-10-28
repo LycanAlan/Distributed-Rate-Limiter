@@ -61,7 +61,10 @@ struct Framed {
 // Finds the end of the header block. Doesn't look at the body.
 ParseStatus frame(const std::string& buf, Framed& f) {
   size_t end = buf.find("\r\n\r\n");
-  if (end == std::string::npos) return buf.size() > kMaxHeaderBytes ? ParseStatus::TooLarge : ParseStatus::Incomplete;
+  if (end == std::string::npos) {
+    bool too_long_to_ever_finish = buf.size() > kMaxHeaderBytes;
+    return too_long_to_ever_finish ? ParseStatus::TooLarge : ParseStatus::Incomplete;
+  }
   if (end > kMaxHeaderBytes) return ParseStatus::TooLarge;
   std::string_view head(buf.data(), end);
   size_t eol = head.find("\r\n");
@@ -87,12 +90,13 @@ bool parse_headers(std::string_view block, std::vector<Header>& out) {
 }
 
 ParseStatus content_length(const std::vector<Header>& hs, bool required, size_t& len) {
+  constexpr size_t kMaxDigits = 15;  // far above kMaxBodyBytes, and can't overflow size_t
   if (find_header(hs, "Transfer-Encoding")) return ParseStatus::Error;
   bool seen = false;
   len = 0;
   for (const auto& h : hs) {
     if (!iequals(h.name, "Content-Length")) continue;
-    if (h.value.empty() || h.value.size() > 15) return ParseStatus::Error;
+    if (h.value.empty() || h.value.size() > kMaxDigits) return ParseStatus::Error;
     size_t v = 0;
     for (char c : h.value) {
       if (!std::isdigit((unsigned char)c)) return ParseStatus::Error;
@@ -125,6 +129,50 @@ bool is_hop_by_hop(std::string_view name) {
 
 bool status_has_no_body(int status) { return status < 200 || status == 204 || status == 304; }
 
+bool is_supported_version(std::string_view v) { return v == "HTTP/1.1" || v == "HTTP/1.0"; }
+
+struct RequestLine {
+  std::string_view method, target, version;
+};
+
+// METHOD SP target SP version, exactly one space between parts.
+bool parse_request_line(std::string_view line, RequestLine& out) {
+  size_t first_space = line.find(' ');
+  if (first_space == std::string_view::npos) return false;
+  size_t second_space = line.find(' ', first_space + 1);
+  if (second_space == std::string_view::npos) return false;
+
+  out.method = line.substr(0, first_space);
+  out.target = line.substr(first_space + 1, second_space - first_space - 1);
+  out.version = line.substr(second_space + 1);
+  return is_token(out.method) && !out.target.empty() && is_supported_version(out.version);
+}
+
+struct StatusLine {
+  std::string_view version;
+  int status = 0;
+};
+
+// version SP 3DIGIT [SP reason-phrase]
+bool parse_status_line(std::string_view line, StatusLine& out) {
+  constexpr size_t kVersionLen = 8;                 // "HTTP/1.1"
+  constexpr size_t kStatusStart = kVersionLen + 1;  // after the space
+  constexpr size_t kStatusLen = 3;
+  if (line.size() < kStatusStart + kStatusLen || line[kVersionLen] != ' ') return false;
+
+  out.version = line.substr(0, kVersionLen);
+  if (!is_supported_version(out.version)) return false;
+
+  std::string_view digits = line.substr(kStatusStart, kStatusLen);
+  out.status = 0;
+  for (char c : digits) {
+    if (!std::isdigit((unsigned char)c)) return false;
+    out.status = out.status * 10 + (c - '0');
+  }
+  bool has_reason = line.size() > kStatusStart + kStatusLen;
+  return !has_reason || line[kStatusStart + kStatusLen] == ' ';
+}
+
 }  // namespace
 
 const std::string* HttpRequest::header(std::string_view name) const { return find_header(headers, name); }
@@ -135,25 +183,19 @@ ParseStatus parse_request(std::string& buf, HttpRequest& out) {
   ParseStatus s = frame(buf, f);
   if (s != ParseStatus::Done) return s;
 
-  // METHOD SP target SP version, single spaces only
-  size_t p1 = f.start.find(' ');
-  if (p1 == std::string_view::npos) return ParseStatus::Error;
-  size_t p2 = f.start.find(' ', p1 + 1);
-  if (p2 == std::string_view::npos) return ParseStatus::Error;
-  std::string_view method = f.start.substr(0, p1);
-  std::string_view target = f.start.substr(p1 + 1, p2 - p1 - 1);
-  std::string_view version = f.start.substr(p2 + 1);
-  if (!is_token(method) || target.empty() || (version != "HTTP/1.1" && version != "HTTP/1.0"))
-    return ParseStatus::Error;
-
+  RequestLine line;
+  if (!parse_request_line(f.start, line)) return ParseStatus::Error;
   if (!parse_headers(f.headers, out.headers)) return ParseStatus::Error;
-  size_t len;
-  if ((s = content_length(out.headers, false, len)) != ParseStatus::Done) return s;
-  out.method = method;
-  out.target = target;
-  out.version = version;
-  out.keep_alive = keep_alive_for(version, out.headers);
-  return take_body(buf, f, len, out);
+
+  size_t body_len = 0;
+  s = content_length(out.headers, /*required=*/false, body_len);
+  if (s != ParseStatus::Done) return s;
+
+  out.method = line.method;
+  out.target = line.target;
+  out.version = line.version;
+  out.keep_alive = keep_alive_for(line.version, out.headers);
+  return take_body(buf, f, body_len, out);
 }
 
 ParseStatus parse_response(std::string& buf, HttpResponse& out) {
@@ -161,21 +203,19 @@ ParseStatus parse_response(std::string& buf, HttpResponse& out) {
   ParseStatus s = frame(buf, f);
   if (s != ParseStatus::Done) return s;
 
-  // version SP 3DIGIT [SP reason]
-  std::string_view line = f.start;
-  if (line.size() < 12 || (line.substr(0, 9) != "HTTP/1.1 " && line.substr(0, 9) != "HTTP/1.0 ") ||
-      !std::isdigit((unsigned char)line[9]) || !std::isdigit((unsigned char)line[10]) ||
-      !std::isdigit((unsigned char)line[11]) || (line.size() > 12 && line[12] != ' '))
-    return ParseStatus::Error;
-  int status = (line[9] - '0') * 100 + (line[10] - '0') * 10 + (line[11] - '0');
-
+  StatusLine line;
+  if (!parse_status_line(f.start, line)) return ParseStatus::Error;
   if (!parse_headers(f.headers, out.headers)) return ParseStatus::Error;
-  size_t len = 0;
-  if (!status_has_no_body(status) && (s = content_length(out.headers, true, len)) != ParseStatus::Done)
-    return s;
-  out.status = status;
-  out.keep_alive = keep_alive_for(line.substr(0, 8), out.headers);
-  return take_body(buf, f, len, out);
+
+  size_t body_len = 0;
+  if (!status_has_no_body(line.status)) {
+    s = content_length(out.headers, /*required=*/true, body_len);
+    if (s != ParseStatus::Done) return s;
+  }
+
+  out.status = line.status;
+  out.keep_alive = keep_alive_for(line.version, out.headers);
+  return take_body(buf, f, body_len, out);
 }
 
 std::string serialize(const HttpRequest& r) {
