@@ -481,3 +481,32 @@ building goes under "Lessons from the build" at the bottom.
   154k req/s with p99 0.54 ms; through the gateway 56k req/s with p99 1.28 ms; with a rule check
   54k req/s. The proxy hop costs about 3× because one thread handles two sockets per request; the
   rate-limit check itself costs about 4%.
+
+**Day 3: async Redis client**
+- **Plugging a C library into your own event loop.** hiredis doesn't do I/O scheduling itself. It
+  calls six hooks (`addRead`, `delRead`, `addWrite`, `delWrite`, `scheduleTimer`, `cleanup`) to say
+  which events it wants, and we call `redisAsyncHandleRead/Write/Timeout` when they happen. That's
+  how libuv, libevent and Redis's own `ae` adapters work too. `redis_async.cpp` is about 40 lines of
+  adapter.
+- **One exit path for every failure ★.** A connection can die from EOF, a socket error, a timeout, a
+  refused connect, or our destructor. hiredis calls the `cleanup` hook exactly once in every case, so
+  that hook is the *only* place we unregister the fd, cancel timers and schedule the reconnect.
+  Spreading that logic over a connect callback, a disconnect callback and error branches is how
+  reconnect bugs happen.
+- **The context can free itself under your feet.** `redisAsyncHandleRead` may tear the connection down
+  (EOF), so `on_socket_event` re-checks `ctx_` before also handling the write event. That's the same
+  bug class as Day 1's stale epoll events.
+- **Callbacks after death.** Destroying a shard frees the hiredis context, which runs every pending
+  callback with a NULL reply. Those callbacks belong to objects (server, decider) that may already be
+  gone, so a `destroying_` flag drops them. Test `DestroyingTheShardWithCommandsInFlightIsSafe`.
+- **hiredis timeouts kill the connection.** When a command times out, hiredis fails *all* pending
+  commands and disconnects, because it can't match late replies to requests on a pipelined
+  connection. So a timeout costs a reconnect (500 ms here) as well as a failed call. That's one more
+  reason the circuit breaker exists: it stops us hammering a shard that's timing out.
+- **NOSCRIPT without a SHA1 implementation.** `EVALSHA` needs the script's SHA1. Instead of
+  computing it ourselves, we `SCRIPT LOAD` on connect and remember what Redis returns. If Redis later
+  answers `NOSCRIPT` (restart or `SCRIPT FLUSH`), we send plain `EVAL` once, which also re-caches
+  the script.
+- **Sanitizers find what tests can't.** The whole suite, plus the gateway under load with clients
+  hanging up mid-request, ran under AddressSanitizer and UBSan: no use-after-free, no leaks, no UB.
+  Tests check behaviour; sanitizers check that memory handling is actually correct. Say this in interviews.

@@ -614,22 +614,25 @@ Both tests call it first.)
 
 **Produces:**
 ```cpp
-struct RedisResult { bool ok; std::string error; std::vector<long long> ints; };
+struct RedisResult { bool ok; std::string error; std::vector<long long> values; std::string text; };
 using RedisCb = std::function<void(RedisResult)>;
+using LuaScripts = std::map<std::string, std::string>;  // name -> source
+LuaScripts load_lua_scripts(const std::string& dir, const std::vector<std::string>& names);
 class RedisShard {
  public:
-  RedisShard(EventLoop&, std::string host, int port, int64_t timeout_ms);
-  void connect();                                         // async; reconnects every 500 ms while down
+  // Scripts are passed in, not registered globally: no hidden state, easy to test.
+  RedisShard(EventLoop&, std::string host, int port, int64_t timeout_ms, const LuaScripts& scripts);
+  void connect();                    // async; reconnects every 500 ms while down
   bool connected() const;
-  // Loads (SCRIPT LOAD) on connect; on NOSCRIPT reloads and retries once.
-  void eval(const std::string& script_name, const std::string& key,
-            std::vector<long long> args, RedisCb cb);
-  void command(std::vector<std::string> argv, RedisCb cb);  // for naive GET/SET
-  static void register_script(const std::string& name, std::string source);  // from LUA_DIR at startup
+  const std::string& name() const;   // "host:port", the hash-ring node name
+  // EVALSHA; on NOSCRIPT falls back to EVAL with the source (which re-caches it).
+  void eval(const std::string& script, const std::string& key, const std::vector<long long>& args, RedisCb cb);
+  void command(const std::vector<std::string>& argv, RedisCb cb);  // for naive GET/SET
 };
 ```
 Our own hiredis adapter: hook `addRead/delRead/addWrite/delWrite/cleanup/scheduleTimer` into
-`EventLoop` (see hiredis `adapters/` for the shape). Use `redisAsyncSetTimeout`.
+`EventLoop` (see hiredis `adapters/` for the shape). Connect and command timeouts are set through
+`redisOptions`. The `cleanup` hook is the only place a dead connection is handled.
 
 **Tests (live Redis):** registered script `return {1,2,3}` → callback gets ints `{1,2,3}`; after
 `SCRIPT FLUSH` the next `eval` still succeeds (NOSCRIPT reload path); with `CLIENT PAUSE 300 ALL`
