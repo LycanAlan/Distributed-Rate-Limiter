@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# End-to-end check of the gateway in local mode (plan Task C6).
+# End-to-end check of one gateway (plan Tasks C6, C8).
 # Starts a dummy upstream and one gateway on spare ports, then checks real
 # HTTP behaviour with curl and raw sockets.
 #
-# Usage: bench/smoke.sh [build_dir]        (default: ~/rl-build)
+# Usage: [MODE=local|redis|naive] [LUA_DIR=...] bench/smoke.sh [build_dir]   (default: ~/rl-build)
+# redis and naive modes use the Redis on :6379.
 set -euo pipefail
 
+MODE=${MODE:-local}
 BUILD_DIR=${1:-$HOME/rl-build}
 GATEWAY_BIN=$BUILD_DIR/gateway
 GATEWAY_PORT=18081
@@ -54,12 +56,15 @@ raw_exchange() {
 }
 
 [[ -x $GATEWAY_BIN ]] || fail "no gateway binary at $GATEWAY_BIN (build first)"
-echo "smoke * /limited ip fixed_window 3 60000 closed" >"$WORK_DIR/rules.conf"
+# A rule name unique to this run, so Redis counts from an earlier run don't leak in.
+echo "smoke_$$ * /limited ip fixed_window 3 60000 closed" >"$WORK_DIR/rules.conf"
+lua_args=()
+[[ -n ${LUA_DIR:-} ]] && lua_args=(--lua-dir "$LUA_DIR")
 
 "$GATEWAY_BIN" --serve-upstream --port $UPSTREAM_PORT 2>"$WORK_DIR/upstream.log" &
 UPSTREAM_PID=$!
-"$GATEWAY_BIN" --port $GATEWAY_PORT --upstream 127.0.0.1:$UPSTREAM_PORT \
-  --rules "$WORK_DIR/rules.conf" --mode local 2>"$WORK_DIR/gateway.log" &
+"$GATEWAY_BIN" --port $GATEWAY_PORT --upstream 127.0.0.1:$UPSTREAM_PORT --rules "$WORK_DIR/rules.conf" \
+  --mode "$MODE" --redis 127.0.0.1:6379 "${lua_args[@]}" 2>"$WORK_DIR/gateway.log" &
 GATEWAY_PID=$!
 wait_until_up $UPSTREAM_PORT
 wait_until_up $GATEWAY_PORT
@@ -113,4 +118,4 @@ wait $GATEWAY_PID
 pass "gateway exited cleanly on SIGTERM"
 GATEWAY_PID=
 
-echo "smoke: all checks passed"
+echo "smoke ($MODE mode): all checks passed"

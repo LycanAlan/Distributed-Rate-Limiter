@@ -34,6 +34,7 @@ struct Options {
   std::vector<std::pair<std::string, int>> redis;  // shards
   int nodes = 1;
   int64_t redis_timeout_ms = 50;
+  std::string lua_dir = LUA_DIR;  // compiled-in path to the repo's lua/ folder
 };
 
 std::vector<Rule> parse_rules(std::istream& in);         // throws std::runtime_error("line N: ...")

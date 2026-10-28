@@ -96,6 +96,13 @@ TEST(Config, ParseArgsGatewayExample) {
   EXPECT_EQ(o.redis_timeout_ms, 50);
 }
 
+TEST(Config, LuaDirDefaultsToTheRepoAndCanBeOverridden) {
+  const char* defaults[] = {"gateway"};
+  EXPECT_EQ(parse_args(1, defaults).lua_dir, LUA_DIR);
+  const char* custom[] = {"gateway", "--lua-dir", "/tmp/scripts"};
+  EXPECT_EQ(parse_args(3, custom).lua_dir, "/tmp/scripts");
+}
+
 TEST(Config, ParseArgsUpstreamExample) {
   const char* argv[] = {"gateway", "--serve-upstream", "--port", "9000"};
   Options o = parse_args(4, argv);

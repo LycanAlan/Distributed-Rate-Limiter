@@ -165,7 +165,7 @@ std::vector<Rule> parse_rules(std::istream& in) {
 
 Options parse_args(int argc, const char* const* argv) {
   static const std::set<std::string> kFlagsWithValue = {
-      "--port", "--upstream", "--rules", "--mode", "--redis", "--nodes", "--redis-timeout-ms"};
+      "--port", "--upstream", "--rules", "--mode", "--redis", "--nodes", "--redis-timeout-ms", "--lua-dir"};
   Options o;
   for (int i = 1; i < argc; i++) {
     const std::string flag = argv[i];
@@ -191,6 +191,8 @@ Options parse_args(int argc, const char* const* argv) {
       o.nodes = static_cast<int>(positive_or_fail(value, flag));
     } else if (flag == "--redis-timeout-ms") {
       o.redis_timeout_ms = positive_or_fail(value, flag);
+    } else if (flag == "--lua-dir") {
+      o.lua_dir = value;
     }
   }
   validate(o);
