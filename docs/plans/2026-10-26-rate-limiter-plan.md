@@ -33,11 +33,11 @@ GoogleTest 1.14, wrk 4.1, Python 3.12 (stdlib only). WSL2 Ubuntu 24.04.
 
 ```bash
 wsl -d Ubuntu-24.04
-cd <repo path under /mnt/c/...>
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build
-ctest --test-dir build --output-on-failure          # everything
-ctest --test-dir build --output-on-failure -R FixedWindow   # one group
+cd /mnt/c/Users/lycan/OneDrive/Desktop/projs/distributed-rate-limiter
+cmake -S . -B ~/rl-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo   # build dir outside OneDrive
+cmake --build ~/rl-build
+ctest --test-dir ~/rl-build --output-on-failure      # everything
+~/rl-build/test_limiters                             # one area: run its test binary directly
 ```
 
 ## A note on code in this plan
@@ -137,7 +137,7 @@ so every test starts **red**.
 Study first: THEORY.md → "Day 1: Rate-limiting algorithms".
 
 **Files:** modify only `src/limiters.cpp` (and the private members in `src/limiters.h`).
-**Done when:** `ctest --test-dir build -R "FixedWindow|SlidingLog|SlidingCounter|TokenBucket"` is all green.
+**Done when:** `~/rl-build/test_limiters` is all green.
 
 **Contract (given):**
 ```cpp
@@ -454,7 +454,7 @@ Expect: `/limited` ×3 → 200; 4th → 429 with `Retry-After`; `/free` → 200 
 
 Study first: THEORY.md → "Day 2: Redis internals and Lua atomicity".
 **Files:** `lua/fixed_window.lua`, `lua/sliding_log.lua`, `lua/sliding_counter.lua`, `lua/token_bucket.lua`, `lua/lease.lua`.
-**Done when:** `ctest --test-dir build -R Lua` is all green (Redis must be running: `redis-cli ping` → PONG).
+**Done when:** `~/rl-build/test_lua` is all green (Redis must be running: `redis-cli ping` → PONG).
 
 **Contract:** `EVALSHA sha 1 KEYS[1] ARGV[1]=limit ARGV[2]=window_ms [ARGV[3]=chunk]`.
 - Time: `local t = redis.call('TIME'); local now = t[1]*1000 + math.floor(t[2]/1000)`.
@@ -655,7 +655,7 @@ connecting to a closed port calls back `ok=false` quickly.
 ## Task U3 [ALI]: Consistent hash ring (Day 3, about 3 h)
 
 Study first: THEORY.md → "Day 3: Consistent hashing".
-**Files:** `src/hash_ring.cpp` (+ private members in the header). **Done when:** `ctest -R "HashRing|Hash64"` is green.
+**Files:** `src/hash_ring.cpp` (+ private members in the header). **Done when:** `~/rl-build/test_hash_ring` is green.
 
 **Contract (given):**
 ```cpp
@@ -762,7 +762,7 @@ Commit when green: `feat: consistent hash ring with virtual nodes`.
 ## Task U4 [ALI]: Circuit breaker (Day 4, about 2-3 h)
 
 Study first: THEORY.md → "Day 4: Failure handling".
-**Files:** `src/circuit_breaker.cpp` (+ private members). **Done when:** `ctest -R Breaker` is green.
+**Files:** `src/circuit_breaker.cpp` (+ private members). **Done when:** `~/rl-build/test_breaker` is green.
 
 **Contract (given):**
 ```cpp
