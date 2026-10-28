@@ -436,3 +436,24 @@ building goes under "Lessons from the build" at the bottom.
 
 ## Lessons from the build
 (Filled in as we go: bugs we hit and what they taught us.)
+
+**Day 1**
+- **Stale events in an epoll batch ★.** `epoll_wait` hands back up to 128 ready events at once. If the
+  callback for event #1 closes the fd behind event #2, a naive loop still runs #2's handler: a
+  use-after-free, or worse, a call into a *new* connection that reused the same fd number. The fix in
+  `event_loop.cpp`: `epoll_event.data` holds a unique registration id instead of the fd, and dispatch
+  skips ids that are gone. A callback that deletes *itself* is kept alive by copying its `shared_ptr`
+  before the call. Good answer to "what's hard about writing an event loop?"
+- **Level-triggered `EPOLLOUT` spins.** An idle socket is always writable, so asking for `EPOLLOUT`
+  permanently makes the loop busy-wait at 100% CPU. Ask only while there's unsent output (test
+  `ModFdSwitchesInterest`).
+- **Tests must fail cleanly.** The first version of the Lua tests indexed into an empty reply when a
+  script returned an error, so against the stubs they *segfaulted* instead of failing. A red test
+  should tell you *what's* wrong. The helper now returns sentinel values and reports the Redis error text.
+- **Exactness at boundaries.** The exact sliding-counter `retry_after` can be `window_ms + 1`: at the
+  first ms of the next window the previous window still weighs 100%. The first draft of the test had
+  `≤ window_ms` and would have rejected a correct solution. Validating tests against a reference
+  implementation caught it.
+- **HTTP framing is a security boundary.** The parser rejects `Transfer-Encoding`, duplicate
+  conflicting `Content-Length`, spaces in header names (obsolete line folding) and double spaces in
+  the request line. Being strict is the defense against request smuggling.
