@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -12,11 +13,18 @@
 // Integration tests for lua/*.lua against a live Redis on :6379, database 15.
 // Skipped (not failed) when Redis is down.
 
-static std::string load(const std::string& name) {
-  std::ifstream f(std::string(LUA_DIR) + "/" + name);
-  std::stringstream ss;
-  ss << f.rdbuf();
-  return ss.str();
+// Cached: reading from /mnt/c under WSL takes tens of ms, and the timing tests
+// (token refill) assume back-to-back calls are about a millisecond apart.
+static const std::string& load(const std::string& name) {
+  static std::map<std::string, std::string> sources;
+  auto [it, first_load] = sources.try_emplace(name);
+  if (first_load) {
+    std::ifstream f(std::string(LUA_DIR) + "/" + name);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    it->second = ss.str();
+  }
+  return it->second;
 }
 static void sleep_ms(long long ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 

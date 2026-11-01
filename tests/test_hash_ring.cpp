@@ -86,6 +86,8 @@ TEST(HashRing, RemovingANodeMovesOnlyItsKeys) {
   for (int i = 0; i < 30000; i++) before.push_back(r.node_for(K(i)));
   r.remove_node("b");
   for (int i = 0; i < 30000; i++) {
-    if (before[i] != "b") EXPECT_EQ(r.node_for(K(i)), before[i]);
+    if (before[i] != "b") {
+      EXPECT_EQ(r.node_for(K(i)), before[i]);
+    }
   }
 }

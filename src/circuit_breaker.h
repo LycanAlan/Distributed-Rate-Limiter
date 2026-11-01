@@ -16,5 +16,11 @@ class CircuitBreaker {
   BreakerState state() const;
 
  private:
-  // TODO(Ali)
+  void trip(int64_t now_ms);
+
+  const int failure_threshold_;
+  const int64_t open_ms_;
+  BreakerState state_ = BreakerState::Closed;
+  int consecutive_failures_ = 0;
+  int64_t opened_at_ms_ = 0;
 };

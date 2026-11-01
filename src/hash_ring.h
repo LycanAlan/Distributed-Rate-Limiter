@@ -18,5 +18,6 @@ class HashRing {
 
  private:
   int vnodes_;
-  // TODO(Ali): your ring + node set
+  std::map<uint64_t, std::string> ring_;  // position on the circle -> node; sorted, so "next clockwise" is lower_bound
+  std::set<std::string> nodes_;           // physical nodes
 };
