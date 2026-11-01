@@ -4,6 +4,10 @@
 > the Claude-owned tasks task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
 > Tasks marked **[ALI]** are written by Ali by hand. Claude never writes their implementation;
 > it only reviews, and gives hints when asked.
+>
+> **Update 2026-11-01:** Ali chose to finish the project faster. Claude wrote U1-U4 as well,
+> with the algorithmic files written to be read and studied (see the top of THEORY.md). U5,
+> the explain-back, is still Ali's.
 
 **Goal:** A C++17 epoll HTTP gateway that enforces per-key rate limits consistently across
 3 nodes using sharded Redis, with measured accuracy, latency and failure behaviour.

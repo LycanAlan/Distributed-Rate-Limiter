@@ -8,9 +8,22 @@ call a day done. Items marked ★ are the highest-yield for interviews.
 Claude adds to this file as the build goes. Anything that surprised us while
 building goes under "Lessons from the build" at the bottom.
 
+### Read these files first (the algorithmic core)
+Each opens with a comment explaining the idea, with a diagram where it helps. Read the comment,
+then the code, then the tests, and explain each one out loud.
+1. `src/limiters.cpp`: the four algorithms side by side. The sliding counter's `retry_after_ms`
+   is the subtlest piece of maths in the project.
+2. `lua/sliding_counter.lua` and `lua/token_bucket.lua`: the same algorithms as atomic Redis
+   scripts. Compare them with the C++ line by line. The differences are where the time comes
+   from (Redis `TIME`) and how keys expire (`PEXPIRE`).
+3. `src/hash_ring.cpp`: consistent hashing with virtual nodes, about 40 lines.
+
+Then `src/circuit_breaker.cpp` (a state machine, about 30 lines) and the hybrid-mode section of
+`src/decider.cpp` (`decide_hybrid`, `request_lease`).
+
 ---
 
-## Day 1: Rate-limiting algorithms ★ (you implement these)
+## Day 1: Rate-limiting algorithms ★ (code: `src/limiters.cpp`)
 
 ### Why rate limit at all
 **Know**
@@ -190,7 +203,7 @@ building goes under "Lessons from the build" at the bottom.
 
 ---
 
-## Day 2: Redis internals and Lua atomicity ★ (you write the Lua)
+## Day 2: Redis internals and Lua atomicity ★ (code: `lua/*.lua`)
 
 **Know**
 - Redis executes commands on **one thread**, one at a time. Redis 6+ "I/O threads" only parallelize
@@ -285,7 +298,7 @@ building goes under "Lessons from the build" at the bottom.
 
 ---
 
-## Day 3: Consistent hashing ★ (you implement it)
+## Day 3: Consistent hashing ★ (code: `src/hash_ring.cpp`)
 
 **Know**
 - Naive sharding with `hash(key) % N` is bad when N changes to N+1: about N/(N+1) of keys move,
@@ -318,7 +331,7 @@ building goes under "Lessons from the build" at the bottom.
 
 ---
 
-## Day 4: Failure handling, timeouts and circuit breakers ★ (you implement the breaker)
+## Day 4: Failure handling, timeouts and circuit breakers ★ (code: `src/circuit_breaker.cpp`)
 
 **Know**
 - **Timeouts** are mandatory on every remote call. Our Redis budget is 50 ms; past that, the decision
@@ -518,8 +531,9 @@ building goes under "Lessons from the build" at the bottom.
   count (say 7), all decide "allowed", and all `SET 8`. The counter barely moves while hundreds of
   requests pass. That's the **lost update** problem, at scale.
 - The fix is to make check-and-update one indivisible step *inside Redis*: `INCR` then compare (it
-  returns the new value), or, for multi-step algorithms like token bucket, a Lua script. Your
-  `fixed_window.lua` result goes in the README next to the 558.
+  returns the new value), or, for multi-step algorithms like token bucket, a Lua script. With
+  `fixed_window.lua` in place, **redis mode admitted exactly 100**. (A later run of naive mode
+  admitted all 600: how bad the race gets depends on timing, which is the point.)
 - **Fail modes are policy, per rule.** Against stub scripts (every call errors): `open` → 200,
   `closed` → 429, `local` → a local limiter with `limit / nodes`. Login rules should be `closed`, so an
   outage can't become a brute-force window; general API rules `open` or `local`.
@@ -528,4 +542,55 @@ building goes under "Lessons from the build" at the bottom.
   identical lines a second, which is itself an outage (disk, log pipeline).
 - **Test wiring separately from logic.** Fake scripts that return fixed answers (`{1,7,0}`,
   `{0,0,2500}`) prove the plumbing: argument passing, reply parsing, headers, `Retry-After` rounding.
-  Your real scripts are then the only variable when their tests run.
+  The real scripts are then the only variable when their tests run.
+
+**Day 4: the algorithms, sharding, breakers and hybrid mode**
+- **Integer maths for the sliding counter.** `previous * (W - elapsed) / W + current < limit` has a
+  division in it. Multiplying both sides by `W` gives `previous * (W - elapsed) + current * W <
+  limit * W`: all integers, no rounding. The same trick gives an exact `retry_after`, by solving for
+  the first millisecond at which the inequality holds (`first_moment_under_budget` in
+  `limiters.cpp`). The answer can be `W + 1`, as the Day 1 lesson says.
+- **Floats in token buckets.** Tokens are fractional (0.3 of a token accrues in 30 ms), so they're a
+  `double`. `retry_after` is computed as `ceil(missing * W / limit)`, multiplying before dividing,
+  rather than from a precomputed rate `limit / W`, which already carries rounding error. Lua numbers
+  are doubles too, and Redis truncates them to integers on the way out. So the scripts `floor` and
+  `ceil` explicitly.
+- **Timing tests depend on the machine.** `TokenBucketRefills` failed one run in three. The test
+  helper re-read the script file from `/mnt/c` (slow under WSL) on every call, so tokens refilled
+  *between* calls the test assumed were back to back. The fix was caching the file, not loosening
+  the assertion. A flaky test is a bug in the test or its environment. Don't retry it until it passes.
+- **Re-entrancy when draining a queue ★.** In hybrid mode, requests for a key queue while a lease
+  request is out. When the lease arrives, `retry_waiting` answers them, and answering one can
+  synchronously start the client's *next* pipelined request, which appends to that same queue. So
+  the queue is swapped into a local vector first and the loop runs over the copy. Iterating a vector
+  you might append to is undefined behaviour that only shows under load.
+- **Why hybrid can't over-admit.** Redis hands out at most `limit` tokens per fixed window, and leased
+  tokens expire with their window. Tokens never carry over, so the cluster can't exceed the limit.
+  The cost is the opposite error: a node that leased 16 tokens and then went quiet strands them until
+  the window ends. Chunk size trades Redis calls against that stranded quota
+  (`max(1, limit / (nodes * 4))` here).
+- **Measuring accuracy honestly.** Counting admissions per fixed window hides boundary bursts, because
+  the windows are the same ones the limiter uses. `accuracy.py` also reports the most admissions in
+  *any* 2 s span. Results: local 600 per window (+201%, three nodes each allowing the full limit),
+  redis 200 (+0%), hybrid 200 per window but 202 in the worst sliding span (+1%: its leases are fixed
+  windows).
+- **Breaker timeline, measured (`chaos.py`).** Shard :6380 killed under 500 req/s: breakers open on all
+  3 nodes within 222 ms (a dead connection fails commands instantly, so 5 failures arrive fast). Back
+  to closed 3.2 s after the restart: Redis boot, plus up to 500 ms for the reconnect timer, plus
+  waiting out the 2 s open period for the next probe. **0 failed requests** throughout: affected users
+  were limited by the local fallback (`limit / 3` per node) instead of getting errors.
+- **Per-key state is never evicted.** Limiter maps and hybrid leases grow with the number of distinct
+  keys. Fine for a benchmark, but keyed on client IPs in production it's a memory leak an attacker
+  controls. The fix is an idle-key sweep on a timer, marked with a `ponytail:` comment in `limiters.h`.
+
+**Day 5: the numbers (`bench/wrk.sh`, one gateway node, 10,000 users)**
+- Upstream alone 86k req/s; through the gateway 28.8k (local), 20.0k (redis), 27.4k (hybrid).
+  **The proxy hop, not the rate limiting, is the main cost**: one thread does two sockets and two
+  parses per request. Know this before an interviewer asks "where does the time go?".
+- Redis per request costs about 30% of throughput; hybrid leasing gets most of it back. That's the
+  classic trade: fewer coordination round trips for a bounded error (stranded quota).
+- **Don't benchmark while compiling.** A sanitizer build running at the same time dragged one run
+  down, so that row was re-measured on an idle machine. Same machine, same load, nothing else running,
+  several runs, report the median, and say what the machine was.
+- Tail latency varied 7-11 ms between identical runs. On a laptop VM, p99 is weather. Quote medians
+  for throughput and treat p99 as indicative only. Mention coordinated omission if p99 comes up.
