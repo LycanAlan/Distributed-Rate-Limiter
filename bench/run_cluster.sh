@@ -5,6 +5,7 @@
 #
 # Usage: bench/run_cluster.sh up <mode> [rules_file]
 #        bench/run_cluster.sh down
+#        bench/run_cluster.sh shard-down | shard-up    (stop or start :6380 only, for chaos.py)
 # Env:   BUILD_DIR (default ~/rl-build), LUA_DIR (default: the gateway's compiled-in lua/)
 set -euo pipefail
 
@@ -106,5 +107,7 @@ down() {
 case ${1:-} in
   up) up "${@:2}" ;;
   down) down ;;
-  *) die "usage: run_cluster.sh up <mode> [rules_file] | down" ;;
+  shard-down) redis-cli -p $EXTRA_REDIS_PORT shutdown nosave >/dev/null 2>&1 || true ;;
+  shard-up) start_redis ;;
+  *) die "usage: run_cluster.sh up <mode> [rules_file] | down | shard-down | shard-up" ;;
 esac

@@ -6,6 +6,7 @@ import subprocess
 import time
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 BENCH_DIR = Path(__file__).resolve().parent
 GATEWAY_PORTS = [8081, 8082, 8083]
@@ -43,6 +44,31 @@ class Connection:
         self.writer.close()
 
 
+async def paced_load(path: str, rate: float, duration_s: float, user: Callable[[], str],
+                     on_status: Callable[[int], None], connections: int = 30) -> None:
+    """Sends `rate` requests per second for `duration_s`, from `connections`
+    keep-alive connections spread round-robin over the gateway nodes.
+    Each request carries X-User-Id: user(); on_status gets every reply's status."""
+    interval_s = connections / rate  # per connection
+    deadline = time.monotonic() + duration_s
+
+    async def connection_loop(port: int, first_send: float) -> None:
+        connection = await Connection.open(port)
+        next_send = first_send
+        try:
+            while next_send < deadline:
+                await asyncio.sleep(max(0.0, next_send - time.monotonic()))
+                on_status(await connection.get(path, {"X-User-Id": user()}))
+                next_send += interval_s  # a slow reply makes the next ones catch up, not drop
+        finally:
+            connection.close()
+
+    start = time.monotonic()
+    stagger_s = interval_s / connections  # so connections don't all fire at once
+    await asyncio.gather(*(connection_loop(GATEWAY_PORTS[i % len(GATEWAY_PORTS)], start + i * stagger_s)
+                           for i in range(connections)))
+
+
 def scrape_metrics(port: int) -> dict[str, int]:
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=2) as response:
         text = response.read().decode()
@@ -60,13 +86,17 @@ def cluster_total(prefix: str, ports: list[int] = GATEWAY_PORTS) -> int:
                if series.startswith(prefix))
 
 
+def cluster(*args: str) -> None:
+    """Runs bench/run_cluster.sh with `args`, e.g. cluster("shard-down")."""
+    subprocess.run([str(BENCH_DIR / "run_cluster.sh"), *args], check=True, stdout=subprocess.DEVNULL)
+
+
 def cluster_up(mode: str, rules: Path | None = None) -> None:
-    args = [str(BENCH_DIR / "run_cluster.sh"), "up", mode] + ([str(rules)] if rules else [])
-    subprocess.run(args, check=True, stdout=subprocess.DEVNULL)
+    cluster("up", mode, *([str(rules)] if rules else []))
 
 
 def cluster_down() -> None:
-    subprocess.run([str(BENCH_DIR / "run_cluster.sh"), "down"], check=True, stdout=subprocess.DEVNULL)
+    cluster("down")
 
 
 def wait_for_fresh_window(window_ms: int, min_left_ms: int) -> None:
