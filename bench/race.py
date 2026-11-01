@@ -5,6 +5,7 @@
 naive mode does GET, then SET (two round trips), so concurrent requests read
 the same count and all get admitted: the lost-update race. redis mode runs the
 check-and-increment as one atomic Lua script, so exactly the limit gets through.
+hybrid leases chunks of the quota atomically, so it can't exceed the limit either.
 
 Usage: python3 bench/race.py      (BUILD_DIR as for run_cluster.sh; default ~/rl-build)
 """
@@ -58,12 +59,12 @@ def main() -> None:
     print(f"{CLIENTS} clients, {ATTEMPTS} attempts, {len(GATEWAY_PORTS)} nodes, "
           f"limit {LIMIT} per {WINDOW_MS // 1000} s window\n")
     print(f"{'mode':<6} {'admitted':>8}  over the limit")
-    for mode in ("naive", "redis"):
+    for mode in ("naive", "redis", "hybrid"):
         admitted, fallbacks = measure(mode)
         over = admitted - LIMIT
         line = f"{mode:<6} {admitted:>8}  {over:+d} ({over * 100 / LIMIT:+.0f}%)"
         if fallbacks:
-            line += f"   [{fallbacks} decisions used the fail mode: is lua/fixed_window.lua implemented?]"
+            line += f"   [{fallbacks} decisions used the fail mode: was Redis reachable?]"
         print(line)
 
 

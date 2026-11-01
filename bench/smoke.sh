@@ -3,8 +3,8 @@
 # Starts a dummy upstream and one gateway on spare ports, then checks real
 # HTTP behaviour with curl and raw sockets.
 #
-# Usage: [MODE=local|redis|naive] [LUA_DIR=...] bench/smoke.sh [build_dir]   (default: ~/rl-build)
-# redis and naive modes use the Redis on :6379.
+# Usage: [MODE=local|redis|naive|hybrid] [LUA_DIR=...] bench/smoke.sh [build_dir]   (default: ~/rl-build)
+# The Redis modes use the Redis on :6379.
 set -euo pipefail
 
 MODE=${MODE:-local}
@@ -72,8 +72,11 @@ wait_until_up $GATEWAY_PORT
 # 1. The limit: 3 allowed, then 429 with the right headers.
 headers=$(curl -s -D - -o /dev/null "$BASE/limited")
 grep -q "^HTTP/1.1 200" <<<"$headers" || fail "first /limited not 200"
-grep -qi "^X-RateLimit-Remaining: 2" <<<"$headers" || fail "missing X-RateLimit-Remaining: 2"
-pass "200  first /limited, X-RateLimit-Remaining: 2"
+# In hybrid mode Remaining is what this node has leased, not the global count.
+if [[ $MODE != hybrid ]]; then
+  grep -qi "^X-RateLimit-Remaining: 2" <<<"$headers" || fail "missing X-RateLimit-Remaining: 2"
+fi
+pass "200  first /limited"
 expect_status 200 "$BASE/limited"
 expect_status 200 "$BASE/limited"
 headers=$(curl -s -D - -o /dev/null "$BASE/limited")
